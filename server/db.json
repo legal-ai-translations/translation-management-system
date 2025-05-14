@@ -1,0 +1,166 @@
+{
+    "documents": [
+      {
+        "id": "doc-1",
+        "orderId": "order-1",
+        "files": [
+          {
+            "id": "file-1",
+            "originalName": "birth_certificate.pdf",
+            "storagePath": "/uploads/original/birth_certificate.pdf",
+            "fileType": "application/pdf",
+            "fileSize": 245000,
+            "uploadDate": "2023-05-15T10:30:00.000Z"
+          }
+        ],
+        "sourceLanguage": "fr",
+        "targetLanguage": "en",
+        "userName": "Marie Dupont",
+        "email": "marie@example.com",
+        "documentType": "birth_certificate",
+        "status": "payment_completed",
+        "createdAt": "2023-05-15T10:30:00.000Z"
+      },
+      {
+        "id": "doc-2",
+        "orderId": "order-2",
+        "files": [
+          {
+            "id": "file-2",
+            "originalName": "drivers_license.jpg",
+            "storagePath": "/uploads/original/drivers_license.jpg",
+            "fileType": "image/jpeg",
+            "fileSize": 125000,
+            "uploadDate": "2023-05-16T14:45:00.000Z"
+          }
+        ],
+        "sourceLanguage": "en",
+        "targetLanguage": "fr",
+        "userName": "John Smith",
+        "email": "john@example.com",
+        "documentType": "drivers_license",
+        "status": "payment_completed",
+        "createdAt": "2023-05-16T14:45:00.000Z"
+      },
+      {
+        "id": "doc-3",
+        "orderId": "order-3",
+        "files": [
+          {
+            "id": "file-3",
+            "originalName": "passport.pdf",
+            "storagePath": "/uploads/original/passport.pdf",
+            "fileType": "application/pdf",
+            "fileSize": 350000,
+            "uploadDate": "2023-05-17T09:15:00.000Z"
+          },
+          {
+            "id": "file-4",
+            "originalName": "passport_photo.jpg",
+            "storagePath": "/uploads/original/passport_photo.jpg",
+            "fileType": "image/jpeg",
+            "fileSize": 85000,
+            "uploadDate": "2023-05-17T09:15:00.000Z"
+          }
+        ],
+        "sourceLanguage": "es",
+        "targetLanguage": "en",
+        "userName": "Carlos Rodriguez",
+        "email": "carlos@example.com",
+        "documentType": "passport",
+        "status": "payment_completed",
+        "createdAt": "2023-05-17T09:15:00.000Z"
+      }
+    ],
+    "translations": [
+      {
+        "id": "trans-1",
+        "documentId": "doc-1",
+        "fileId": "file-1",
+        "originalDocument": "/uploads/original/birth_certificate.pdf",
+        "aiTranslation": "BIRTH CERTIFICATE\n\nName: Marie Dupont\nDate of Birth: May 10, 1992\nPlace of Birth: Paris, France\nParents: Jean Dupont and Amélie Martin\n\nThis document certifies that the above individual was born on the date and at the place indicated.",
+        "aiTranslationUrl": "/uploads/ai_translations/birth_certificate.html",
+        "finalTranslation": "",
+        "sourceLanguage": "fr",
+        "targetLanguage": "en",
+        "documentType": "birth_certificate",
+        "documentHolder": "Marie Dupont",
+        "assignedTranslator": null,
+        "status": "pending",
+        "createdAt": "2023-05-15T10:35:00.000Z",
+        "updatedAt": "2023-05-15T10:35:00.000Z"
+      },
+      {
+        "id": "trans-2",
+        "documentId": "doc-2",
+        "fileId": "file-2",
+        "originalDocument": "/uploads/original/drivers_license.jpg",
+        "aiTranslation": "PERMIS DE CONDUIRE\n\nNom: John Smith\nNuméro de permis: 12345678\nDate d'émission: 1 janvier 2020\nDate d'expiration: 1 janvier 2025\nAdresse: 123 Main St, New York, USA",
+        "aiTranslationUrl": "/uploads/ai_translations/drivers_license.html",
+        "finalTranslation": "",
+        "sourceLanguage": "en",
+        "targetLanguage": "fr",
+        "documentType": "drivers_license",
+        "documentHolder": "John Smith",
+        "assignedTranslator": null,
+        "status": "pending",
+        "createdAt": "2023-05-16T14:50:00.000Z",
+        "updatedAt": "2023-05-16T14:50:00.000Z"
+      },
+      {
+        "id": "trans-3",
+        "documentId": "doc-3",
+        "fileId": "file-3",
+        "originalDocument": "/uploads/original/passport.pdf",
+        "aiTranslation": "PASSPORT\n\nName: Carlos Rodriguez\nPassport Number: ESP123456\nDate of Issue: March 15, 2018\nDate of Expiry: March 14, 2028\nNationality: Spanish\nPlace of Birth: Madrid, Spain\nDate of Birth: January 5, 1985",
+        "aiTranslationUrl": "/uploads/ai_translations/passport.html",
+        "finalTranslation": "",
+        "sourceLanguage": "es",
+        "targetLanguage": "en",
+        "documentType": "passport",
+        "documentHolder": "Carlos Rodriguez",
+        "assignedTranslator": null,
+        "status": "pending",
+        "createdAt": "2023-05-17T09:20:00.000Z",
+        "updatedAt": "2023-05-17T09:20:00.000Z"
+      },
+      {
+        "id": "trans-4",
+        "documentId": "doc-3",
+        "fileId": "file-4",
+        "originalDocument": "/uploads/original/passport_photo.jpg",
+        "aiTranslation": "This is a passport photo of Carlos Rodriguez as specified in the Spanish passport regulations.",
+        "finalTranslation": "",
+        "sourceLanguage": "es",
+        "targetLanguage": "en",
+        "documentType": "passport",
+        "documentHolder": "Carlos Rodriguez",
+        "assignedTranslator": null,
+        "status": "pending",
+        "createdAt": "2023-05-17T09:20:00.000Z",
+        "updatedAt": "2023-05-17T09:20:00.000Z"
+      }
+    ],
+    "users": [
+      {
+        "id": "translator-123",
+        "email": "translator@example.com",
+        "password": "hashed_password",
+        "name": "John Translator",
+        "roles": ["translator"],
+        "languages": ["en", "fr", "es", "it", "pt"],
+        "title": "Certified Translator",
+        "createdAt": "2023-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "translator-456",
+        "email": "sophie@example.com",
+        "password": "hashed_password",
+        "name": "Sophie Traductrice",
+        "roles": ["translator"],
+        "languages": ["fr", "en", "de"],
+        "title": "Court Certified Translator",
+        "createdAt": "2023-01-02T00:00:00.000Z"
+      }
+    ]
+  }
