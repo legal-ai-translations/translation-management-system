@@ -1,10 +1,11 @@
-// pages/TranslationSetup.jsx with flexible document viewer
-import React, { useState, useEffect } from 'react';
+// pages/TranslationSetup.jsx with document upload functionality
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 
 // Services
 import translationService from '../services/translationService';
+import documentService from '../services/documentService';
 
 // Components
 import Spinner from '../components/Spinner';
@@ -17,6 +18,8 @@ const TranslationSetup = () => {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [documentHeight, setDocumentHeight] = useState(600); // Default height
+  const [documentFile, setDocumentFile] = useState(null);
+  const [uploadedDocument, setUploadedDocument] = useState(null);
   const [translation, setTranslation] = useState({
     originalDocument: null,
     sourceLanguage: '',
@@ -26,20 +29,66 @@ const TranslationSetup = () => {
     status: ''
   });
   
+  const fileInputRef = useRef(null);
+  
   // Form state for translation context
   const [translationContext, setTranslationContext] = useState({
     translationMode: 'standard', // standard, interactive, or template
     additionalContext: '', // Any additional context from translator
     templateId: '', // For template-based translations
+    sourceLanguage: 'en',
+    targetLanguage: 'fr',
   });
 
-  // Fetch translation data
+  // Fetch translation data if translationId is provided
   useEffect(() => {
     const fetchTranslation = async () => {
+      if (!translationId) {
+        setLoading(false);
+        return;
+      }
+      
       try {
         setLoading(true);
-        const data = await translationService.getTranslationById(translationId);
-        setTranslation(data);
+        
+        // First, try the traditional flow to get translation by ID
+        try {
+          const data = await translationService.getTranslationById(translationId);
+          setTranslation(data);
+        } catch (error) {
+          console.log('Not a traditional translation ID, trying as document ID');
+          
+          // If not found, assume it's a document ID from new flow
+          const statusData = await documentService.checkTranslationStatus(translationId);
+          
+          // Also try to fetch HTML response to get original document URL
+          try {
+            const htmlsData = await documentService.getTranslatedHTMLs(translationId);
+            
+            if (htmlsData.success && htmlsData.originalDocumentUrl) {
+              // If we have original document URL in the HTML response, use it
+              setTranslation(prev => ({
+                ...prev,
+                originalDocument: htmlsData.originalDocument?.url || null,
+                documentId: translationId
+              }));
+            } else {
+              // Otherwise use any URL from the status response
+              setTranslation(prev => ({
+                ...prev,
+                originalDocument: statusData.dropbox?.url || null,
+                documentId: translationId
+              }));
+            }
+          } catch (htmlError) {
+            console.log('Could not fetch HTML data, using status data instead');
+            setTranslation(prev => ({
+              ...prev,
+              originalDocument: statusData.dropbox?.url || null,
+              documentId: translationId
+            }));
+          }
+        }
         
         // Adjust document height based on window size
         adjustDocumentHeight();
@@ -82,58 +131,137 @@ const TranslationSetup = () => {
     setTranslationContext(prev => ({ ...prev, [name]: value }));
   };
 
+  // Handle file selection
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setDocumentFile(file);
+      
+      // Preview the file if it's an image or PDF
+      if (file.type.includes('image/') || file.type === 'application/pdf') {
+        const objectUrl = URL.createObjectURL(file);
+        setTranslation(prev => ({
+          ...prev,
+          originalDocument: objectUrl
+        }));
+      }
+    }
+  };
+
+  // Trigger file input click
+  const handleBrowseClick = () => {
+    fileInputRef.current.click();
+  };
+
+  // Upload document
+  const handleUploadDocument = async () => {
+    if (!documentFile) {
+      toast.error('Please select a document to upload');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      const result = await documentService.uploadDocument(documentFile);
+      
+      setUploadedDocument(result);
+      
+      toast.success('Document uploaded successfully!');
+      
+      // Update translation info with uploaded document data
+      setTranslation(prev => ({
+        ...prev,
+        originalDocument: result.dropbox?.url || null,
+        documentType: documentFile.type,
+        documentHolder: documentFile.name,
+        documentId: result.documentId
+      }));
+      
+    } catch (error) {
+      console.error('Error uploading document:', error);
+      toast.error('Failed to upload document');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   // Start the translation process
   const handleStartTranslation = async () => {
     try {
+      if (!uploadedDocument?.documentId) {
+        toast.error('Please upload a document first');
+        return;
+      }
+      
       setProcessing(true);
       
-      // Call the API to start the translation process
-      await translationService.startTranslation(translationId, translationContext);
+      // Prepare translation options
+      const translationOptions = {
+        sourceLanguage: translationContext.sourceLanguage,
+        targetLanguage: translationContext.targetLanguage,
+        additionalContext: translationContext.additionalContext,
+        mode: translationContext.translationMode,
+        templateId: translationContext.templateId || undefined
+      };
+      
+      // Trigger translation
+      const result = await documentService.triggerTranslation(
+        uploadedDocument.documentId, 
+        translationOptions
+      );
       
       toast.success('Translation process started');
       
+      // Store job ID
+      const jobId = result.jobId;
+      
       // Poll for translation status
-      await pollTranslationStatus();
+      await pollTranslationStatus(uploadedDocument.documentId, jobId);
     } catch (error) {
       console.error('Error starting translation:', error);
       toast.error('Failed to start translation process');
+    } finally {
       setProcessing(false);
     }
   };
   
   // Poll for translation status until it's ready
-  const pollTranslationStatus = async () => {
+  const pollTranslationStatus = async (documentId, jobId) => {
     try {
-      let isReady = false;
-      const maxAttempts = 20; // Prevent infinite polling
+      let isCompleted = false;
+      const maxAttempts = 30; // Prevent infinite polling
       let attempts = 0;
       
       // Keep checking until translation is ready or max attempts reached
-      while (!isReady && attempts < maxAttempts) {
+      while (!isCompleted && attempts < maxAttempts) {
         attempts++;
         
-        // Wait a bit before checking again
+        // Wait a bit before checking again (3 seconds)
         await new Promise(resolve => setTimeout(resolve, 3000));
         
         // Check translation status
-        const data = await translationService.getTranslationById(translationId);
+        const statusData = await documentService.checkTranslationStatus(documentId);
         
-        // If translation is ready, redirect to the editor
-        if (data.status === 'ready_for_review' && data.aiTranslationUrl) {
-          isReady = true;
-          navigate(`/translator/edit/${translationId}`);
+        console.log('Translation status:', statusData);
+        
+        // If translation is completed, get the results
+        if (statusData.status === 'completed') {
+          isCompleted = true;
+          
+          // Navigate to the editor with the document ID
+          navigate(`/translator/edit/${documentId}`);
+          return;
         }
       }
       
       // If we hit max attempts but translation is not ready
-      if (!isReady) {
+      if (!isCompleted) {
         toast.info('Translation is taking longer than expected. Please check back later.');
         navigate('/translator/dashboard');
       }
     } catch (error) {
       console.error('Error polling translation status:', error);
       toast.error('Error checking translation status');
-      setProcessing(false);
     }
   };
 
@@ -142,10 +270,16 @@ const TranslationSetup = () => {
   }
 
   // Get document type from filename extension
-  const getDocumentType = (url) => {
-    if (!url) return '';
+  const getDocumentType = (file) => {
+    if (!file) return '';
     
-    const extension = url.split('.').pop().toLowerCase();
+    let extension = '';
+    if (typeof file === 'string') {
+      extension = file.split('.').pop().toLowerCase();
+    } else {
+      extension = file.name.split('.').pop().toLowerCase();
+    }
+    
     switch (extension) {
       case 'pdf':
         return 'pdf';
@@ -165,53 +299,129 @@ const TranslationSetup = () => {
     <div className="container translation-setup">
       <h1>Translation Setup</h1>
       
-      <div className="document-info">
-        <div className="section-header">
-          <h2>Document Information</h2>
-          <div className="document-badge">
-            Document ID: {translationId.substring(0, 8)}
+      {/* Display document info if available */}
+      {(translation.documentId || uploadedDocument?.documentId) && (
+        <div className="document-info">
+          <div className="section-header">
+            <h2>Document Information</h2>
+            <div className="document-badge">
+              Document ID: {(uploadedDocument?.documentId || translation.documentId || '').substring(0, 8)}
+            </div>
+          </div>
+          
+          <div className="info-container">
+            <div className="info-item">
+              <label>Document Type</label>
+              <span>{getDocumentType(documentFile) || translation.documentType || 'N/A'}</span>
+            </div>
+            <div className="info-item">
+              <label>Document Name</label>
+              <span>{documentFile?.name || translation.documentHolder || 'N/A'}</span>
+            </div>
           </div>
         </div>
+      )}
+      
+      {/* Document Uploader Section */}
+      <div className="document-upload-section">
+        <div className="section-header">
+          <h2>Upload Document</h2>
+        </div>
         
-        <div className="info-container">
-          <div className="info-item">
-            <label>Document Type</label>
-            <span>{translation.documentType}</span>
+        <div className="upload-container">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+            style={{ display: 'none' }}
+          />
+          
+          <div className="upload-box">
+            <div className="upload-content">
+              {documentFile ? (
+                <>
+                  <div className="selected-file">
+                    <i className="file-icon">📄</i>
+                    <p>{documentFile.name}</p>
+                    <span className="file-size">({Math.round(documentFile.size / 1024)} KB)</span>
+                  </div>
+                  
+                  <button 
+                    className="btn btn-secondary"
+                    onClick={handleBrowseClick}
+                    disabled={processing}
+                  >
+                    Change File
+                  </button>
+                </>
+              ) : (
+                <>
+                  <i className="upload-icon">📤</i>
+                  <p>Drag and drop your document here, or</p>
+                  <button 
+                    className="btn btn-primary"
+                    onClick={handleBrowseClick}
+                    disabled={processing}
+                  >
+                    Browse Files
+                  </button>
+                  <p className="upload-hint">Supported formats: PDF, Word, JPG, PNG</p>
+                </>
+              )}
+            </div>
           </div>
-          <div className="info-item">
-            <label>Document Holder</label>
-            <span>{translation.documentHolder}</span>
-          </div>
-          <div className="info-item">
-            <label>Source Language</label>
-            <span>{translation.sourceLanguage}</span>
-          </div>
-          <div className="info-item">
-            <label>Target Language</label>
-            <span>{translation.targetLanguage}</span>
-          </div>
+          
+          {documentFile && !uploadedDocument && (
+            <div className="upload-actions">
+              <button
+                className="btn btn-primary"
+                onClick={handleUploadDocument}
+                disabled={processing}
+              >
+                {processing ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Uploading...
+                  </>
+                ) : (
+                  'Upload Document'
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
       
       {/* Original Document Viewer with Flexible Height */}
-      <div className="original-document-section">
-        <div className="section-header">
-          <h2>Original Document</h2>
-          <div className="document-actions">
-            <button className="btn btn-sm btn-secondary">
-              <i className="icon-download"></i> Download Original
-            </button>
+      {(translation.originalDocument || uploadedDocument) && (
+        <div className="original-document-section">
+          <div className="section-header">
+            <h2>Original Document</h2>
+            {translation.originalDocument && (
+              <div className="document-actions">
+                <a 
+                  href={translation.originalDocument} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="btn btn-sm btn-secondary"
+                >
+                  <i className="icon-download"></i> View Original
+                </a>
+              </div>
+            )}
           </div>
+          <DocumentViewer 
+            documentUrl={translation.originalDocument} 
+            title={`${translation.documentType || 'Document'} - ${translation.documentHolder || 'Preview'}`}
+            documentType={getDocumentType(documentFile) || getDocumentType(translation.originalDocument)}
+            initialHeight={documentHeight}
+            showPageControls={true}
+          />
         </div>
-        <DocumentViewer 
-          documentUrl={translation.originalDocument} 
-          title={`${translation.documentType} - ${translation.documentHolder}`}
-          documentType={getDocumentType(translation.originalDocument)}
-          initialHeight={documentHeight}
-          showPageControls={true}
-        />
-      </div>
+      )}
       
+      {/* Translation Options Form */}
       <div className="translation-setup-form">
         <div className="section-header">
           <h2>Translation Options</h2>
@@ -229,6 +439,44 @@ const TranslationSetup = () => {
         </div>
         
         <form>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="sourceLanguage">Source Language</label>
+              <select
+                id="sourceLanguage"
+                name="sourceLanguage"
+                value={translationContext.sourceLanguage}
+                onChange={handleInputChange}
+                disabled={processing}
+                className="form-select"
+              >
+                <option value="en">English</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="pt">Portuguese</option>
+                <option value="it">Italian</option>
+              </select>
+            </div>
+            
+            <div className="form-group">
+              <label htmlFor="targetLanguage">Target Language</label>
+              <select
+                id="targetLanguage"
+                name="targetLanguage"
+                value={translationContext.targetLanguage}
+                onChange={handleInputChange}
+                disabled={processing}
+                className="form-select"
+              >
+                <option value="en">English</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="pt">Portuguese</option>
+                <option value="it">Italian</option>
+              </select>
+            </div>
+          </div>
+          
           <div className="form-group">
             <label htmlFor="translationMode">Translation Mode</label>
             <select
@@ -281,7 +529,7 @@ const TranslationSetup = () => {
               value={translationContext.additionalContext}
               onChange={handleInputChange}
               placeholder="Add any additional context that might help with the translation..."
-              rows={5}
+              rows={4}
               disabled={processing}
               className="form-control"
             />
@@ -304,7 +552,7 @@ const TranslationSetup = () => {
               type="button"
               className="btn btn-primary"
               onClick={handleStartTranslation}
-              disabled={processing}
+              disabled={processing || !uploadedDocument}
             >
               {processing ? (
                 <>

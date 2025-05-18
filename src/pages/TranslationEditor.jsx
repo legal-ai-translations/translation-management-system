@@ -1,10 +1,11 @@
-// pages/TranslationEditor.jsx
+// pages/TranslationEditor.jsx with HTML content fetching
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 
 // Services
 import translationService from '../services/translationService';
+import documentService from '../services/documentService';
 
 // Components
 import Spinner from '../components/Spinner';
@@ -29,35 +30,91 @@ const TranslationEditor = () => {
     documentHolder: '',
     status: ''
   });
+  const [htmlContent, setHtmlContent] = useState('');
+  const [htmlFiles, setHtmlFiles] = useState([]);
+  const [selectedPage, setSelectedPage] = useState(1);
 
   // Fetch translation data
   useEffect(() => {
-    const fetchTranslation = async () => {
+    const fetchData = async () => {
       try {
         setLoading(true);
-        const data = await translationService.getTranslationById(translationId);
-        setTranslation(data);
         
-        // Check if the translation is in the right state (ready_for_review)
-        if (data.status !== 'ready_for_review') {
-          toast.warning('This translation is not ready for review yet');
+        // Check if translationId is a job/translation ID or document ID
+        if (translationId) {
+          try {
+            // First try to get translation by ID (traditional flow)
+            const data = await translationService.getTranslationById(translationId);
+            setTranslation(data);
+            
+            // If the AI translation is a URL, we need to fetch the content separately
+            if (data.aiTranslationUrl && !data.aiTranslation) {
+              await fetchAiTranslationContent(data.aiTranslationUrl);
+            }
+          } catch (error) {
+            console.log('Not a traditional translation ID, trying as document ID');
+            
+            // If not found, assume it's a document ID from new flow
+            try {
+              // Try to get the htmls response first to get both content and original document URL
+              const htmlsData = await documentService.getTranslatedHTMLs(translationId);
+              
+              if (htmlsData.success) {
+                // Process HTML content
+                await fetchTranslatedHtmls(translationId);
+                
+                // Set basic translation data
+                setTranslation(prev => ({
+                  ...prev,
+                  documentType: 'Document',
+                  documentHolder: translationId,
+                  status: 'completed',
+                  documentId: translationId
+                }));
+              } else {
+                // If htmls request failed, check the status
+                const statusData = await documentService.checkTranslationStatus(translationId);
+                
+                if (statusData.status === 'completed') {
+                  // Still try to fetch HTML content
+                  await fetchTranslatedHtmls(translationId);
+                  
+                  // Set basic translation data
+                  setTranslation(prev => ({
+                    ...prev,
+                    originalDocument: statusData.dropbox?.url || null,
+                    documentType: 'Document',
+                    documentHolder: translationId,
+                    status: statusData.status,
+                    documentId: translationId
+                  }));
+                } else {
+                  toast.warning('This translation is not ready for review yet');
+                  navigate('/translator/dashboard');
+                  return;
+                }
+              }
+            } catch (innerError) {
+              console.error('Error fetching document data:', innerError);
+              toast.error('Failed to load document data');
+              navigate('/translator/dashboard');
+            }
+          }
+        } else {
+          toast.error('No translation ID provided');
           navigate('/translator/dashboard');
           return;
-        }
-        
-        // If the AI translation is a URL, we need to fetch the content separately
-        if (data.aiTranslationUrl && !data.aiTranslation) {
-          await fetchAiTranslationContent(data.aiTranslationUrl);
         }
       } catch (error) {
         console.error('Error fetching translation:', error);
         toast.error('Failed to load translation data');
+        navigate('/translator/dashboard');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchTranslation();
+    fetchData();
   }, [translationId, navigate]);
 
   // Fetch AI translation content from URL
@@ -109,11 +166,63 @@ const TranslationEditor = () => {
         ...prev,
         aiTranslation: content
       }));
+      
+      // Also set the HTML content
+      setHtmlContent(content);
     } catch (error) {
       console.error('Error fetching AI translation content:', error);
       toast.error('Failed to load AI translation content');
     } finally {
       setContentLoading(false);
+    }
+  };
+
+  // Fetch translated HTML files for a document
+  const fetchTranslatedHtmls = async (documentId) => {
+    try {
+      setContentLoading(true);
+      
+      const response = await documentService.getTranslatedHTMLs(documentId);
+      
+      if (response.success) {
+        // Set the original document URL if available
+        if (response.originalDocument && response.originalDocument.url) {
+          setTranslation(prev => ({
+            ...prev,
+            originalDocument: response.originalDocument.url
+          }));
+        }
+        
+        // Set HTML files
+        if (response.htmlFiles && response.htmlFiles.length > 0) {
+          setHtmlFiles(response.htmlFiles);
+          
+          // Select the first page by default
+          if (response.htmlFiles[0]) {
+            setSelectedPage(1);
+            setHtmlContent(response.htmlFiles[0].content);
+          }
+        } else {
+          toast.warning('No translated HTML files found');
+        }
+      } else {
+        toast.warning('Failed to fetch translated content');
+      }
+    } catch (error) {
+      console.error('Error fetching translated HTMLs:', error);
+      toast.error('Failed to load translated content');
+    } finally {
+      setContentLoading(false);
+    }
+  };
+
+  // Handle page selection change
+  const handlePageChange = (pageNumber) => {
+    const pageIndex = pageNumber - 1;
+    
+    if (htmlFiles[pageIndex]) {
+      setSelectedPage(pageNumber);
+      setHtmlContent(htmlFiles[pageIndex].content);
     }
   };
 
@@ -125,7 +234,26 @@ const TranslationEditor = () => {
         const content = editorRef.current.getContent();
         console.log('Saving content:', content.substring(0, 100) + '...');
         
-        await translationService.saveTranslation(translationId, content);
+        // For traditional flow
+        if (!translation.documentId) {
+          await translationService.saveTranslation(translationId, content);
+        } else {
+          // For new document flow, save the current page
+          const currentPageIndex = selectedPage - 1;
+          
+          if (htmlFiles[currentPageIndex]) {
+            // Update the content in the htmlFiles array
+            const updatedHtmlFiles = [...htmlFiles];
+            updatedHtmlFiles[currentPageIndex] = {
+              ...updatedHtmlFiles[currentPageIndex],
+              content: content
+            };
+            
+            setHtmlFiles(updatedHtmlFiles);
+            // TODO: Add endpoint to save edited HTML content
+            toast.info('Content saved (Note: API endpoint for saving edited HTML not implemented)');
+          }
+        }
         
         // Update the local state
         setTranslation(prev => ({
@@ -150,7 +278,14 @@ const TranslationEditor = () => {
         setSaving(true);
         const content = editorRef.current.getContent();
         
-        await translationService.approveTranslation(translationId, content);
+        // For traditional flow
+        if (!translation.documentId) {
+          await translationService.approveTranslation(translationId, content);
+        } else {
+          // For new document flow, approve all pages
+          // TODO: Add endpoint to approve HTML content
+          toast.info('Translation approved (Note: API endpoint for approving HTML not implemented)');
+        }
         
         toast.success('Translation approved successfully');
         navigate('/translator/dashboard');
@@ -172,10 +307,17 @@ const TranslationEditor = () => {
       <div className="editor-header">
         <h1>Translation Editor</h1>
         <div className="translation-meta">
-          <p><strong>Document Type:</strong> {translation.documentType}</p>
-          <p><strong>Document Holder:</strong> {translation.documentHolder}</p>
-          <p><strong>Source Language:</strong> {translation.sourceLanguage}</p>
-          <p><strong>Target Language:</strong> {translation.targetLanguage}</p>
+          <p><strong>Document ID:</strong> {translation.documentId || translationId}</p>
+          <p><strong>Document Type:</strong> {translation.documentType || 'Document'}</p>
+          {translation.documentHolder && (
+            <p><strong>Document Holder:</strong> {translation.documentHolder}</p>
+          )}
+          {translation.sourceLanguage && (
+            <p><strong>Source Language:</strong> {translation.sourceLanguage}</p>
+          )}
+          {translation.targetLanguage && (
+            <p><strong>Target Language:</strong> {translation.targetLanguage}</p>
+          )}
         </div>
       </div>
 
@@ -194,16 +336,38 @@ const TranslationEditor = () => {
         </div>
         
         <div className="translation-editor-container">
-          <h2>Edit Translation</h2>
+          <div className="editor-header-actions">
+            <h2>Edit Translation</h2>
+            
+            {/* Page selector for multi-page documents */}
+            {htmlFiles.length > 1 && (
+              <div className="page-selector">
+                <label htmlFor="pageSelect">Page:</label>
+                <select 
+                  id="pageSelect" 
+                  value={selectedPage}
+                  onChange={(e) => handlePageChange(Number(e.target.value))}
+                  disabled={contentLoading || saving}
+                >
+                  {htmlFiles.map((file, index) => (
+                    <option key={index} value={index + 1}>
+                      Page {index + 1}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          
           {contentLoading ? (
             <Spinner />
           ) : (
             <TinyMCEEditor
               editorRef={editorRef}
-              initialValue={translation.finalTranslation || translation.aiTranslation}
+              initialValue={htmlContent || translation.finalTranslation || translation.aiTranslation}
               onEditorChange={(content) => {
                 // Optional: If you want to update state on each change
-                setTranslation(prev => ({...prev, finalTranslation: content}));
+                setHtmlContent(content);
               }}
               height={500}
             />

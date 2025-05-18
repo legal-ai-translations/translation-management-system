@@ -16,6 +16,7 @@ import UserUpload from './pages/UserUpload';
 import TranslatorDashboard from './pages/TranslatorDashboard';
 import TranslationSetup from './pages/TranslationSetup';
 import TranslationEditor from './pages/TranslationEditor';
+import CreateTranslation from './pages/CreateTranslation';
 
 // Header component with modern styling
 const Header = () => {
@@ -98,7 +99,15 @@ function App() {
                 } 
               />
               <Route 
-                path="/translator/setup/:translationId" 
+                path="/translator/create" 
+                element={
+                  <ProtectedRoute>
+                    <CreateTranslation />
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/translator/setup/:translationId?" 
                 element={
                   <ProtectedRoute>
                     <TranslationSetup />

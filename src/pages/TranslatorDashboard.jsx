@@ -1,4 +1,4 @@
-// pages/TranslatorDashboard.jsx
+// pages/TranslatorDashboard.jsx with "Create New Translation" button
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -73,13 +73,26 @@ const TranslatorDashboard = () => {
     setFilters(prev => ({ ...prev, [name]: value }));
   };
 
+  // Navigate to create new translation page
+  const handleCreateNewTranslation = () => {
+    navigate('/translator/setup');
+  };
+
   if (loading && translations.length === 0) {
     return <Spinner />;
   }
 
   return (
     <div className="translator-dashboard">
-      <h1>Translator Dashboard</h1>
+      <div className="dashboard-header">
+        <h1>Translator Dashboard</h1>
+        <button 
+          className="btn btn-primary create-translation-btn" 
+          onClick={handleCreateNewTranslation}
+        >
+          Create New Translation
+        </button>
+      </div>
       
       <div className="filter-controls">
         <div className="filter-group">
@@ -137,6 +150,12 @@ const TranslatorDashboard = () => {
       {translations.length === 0 ? (
         <div className="no-translations">
           <p>No translations found matching your filters.</p>
+          <button 
+            className="btn btn-primary mt-4"
+            onClick={handleCreateNewTranslation}
+          >
+            Create Your First Translation
+          </button>
         </div>
       ) : (
         <div className="translations-table-container">

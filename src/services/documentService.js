@@ -68,6 +68,74 @@ const documentService = {
       console.error('Error fetching user documents:', error);
       throw error;
     }
+  },
+
+  /**
+   * Upload a document file for translation
+   * @param {File} file - The document file to upload
+   * @returns {Promise<Object>} - Document upload response with document ID
+   */
+  uploadDocument: async (file) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await apiClient.post('http://localhost:3002/api/documents/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error uploading document:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Trigger translation for a document
+   * @param {string} documentId - ID of the document to translate
+   * @param {Object} translationOptions - Options for translation
+   * @returns {Promise<Object>} - Translation job response
+   */
+  triggerTranslation: async (documentId, translationOptions = {}) => {
+    try {
+      const response = await apiClient.post(`http://localhost:3002/api/documents/${documentId}/translate`, translationOptions);
+      return response.data;
+    } catch (error) {
+      console.error(`Error triggering translation for document ${documentId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Check translation status for a document
+   * @param {string} documentId - ID of the document
+   * @returns {Promise<Object>} - Translation status response
+   */
+  checkTranslationStatus: async (documentId) => {
+    try {
+      const response = await apiClient.get(`http://localhost:3002/api/documents/${documentId}/status`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error checking translation status for document ${documentId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get translated HTML files for a document
+   * @param {string} documentId - ID of the document
+   * @returns {Promise<Object>} - HTML files response
+   */
+  getTranslatedHTMLs: async (documentId) => {
+    try {
+      const response = await apiClient.get(`http://localhost:3002/api/documents/${documentId}/htmls`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching translated HTMLs for document ${documentId}:`, error);
+      throw error;
+    }
   }
 };
 
