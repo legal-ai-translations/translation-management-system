@@ -185,13 +185,12 @@ const TranslationEditor = () => {
       const response = await documentService.getTranslatedHTMLs(documentId);
       
       if (response.success) {
-        // Set the original document URL if available
-        if (response.originalDocument && response.originalDocument.url) {
-          setTranslation(prev => ({
-            ...prev,
-            originalDocument: response.originalDocument.url
-          }));
-        }
+        // Set the preview URL for original document
+        const previewUrl = documentService.getOriginalDocumentPreviewUrl(documentId);
+        setTranslation(prev => ({
+          ...prev,
+          originalDocument: previewUrl
+        }));
         
         // Set HTML files
         if (response.htmlFiles && response.htmlFiles.length > 0) {
