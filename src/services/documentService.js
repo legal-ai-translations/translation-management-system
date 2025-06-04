@@ -136,6 +136,10 @@ const documentService = {
       console.error(`Error fetching translated HTMLs for document ${documentId}:`, error);
       throw error;
     }
+  },
+
+  getOriginalDocumentPreviewUrl: (documentId) => {
+    return `http://localhost:3002/api/documents/${documentId}/original?preview=true`;
   }
 };
 

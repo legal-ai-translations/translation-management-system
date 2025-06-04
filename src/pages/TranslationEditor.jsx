@@ -1,4 +1,4 @@
-// pages/TranslationEditor.jsx with HTML content fetching
+// pages/TranslationEditor.jsx - Complete implementation with full-screen viewer
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -9,7 +9,10 @@ import documentService from '../services/documentService';
 
 // Components
 import Spinner from '../components/Spinner';
-import TinyMCEEditor from '../components/TinyMCEEditor';
+import FullScreenTranslationViewer from '../components/FullScreenTranslationViewer';
+
+// Hooks
+import { useChatbot } from '../hooks/useChatbot';
 
 const TranslationEditor = () => {
   const { translationId } = useParams();
@@ -19,6 +22,8 @@ const TranslationEditor = () => {
   const [loading, setLoading] = useState(true);
   const [contentLoading, setContentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  const [selectionContext, setSelectionContext] = useState('');
   const [translation, setTranslation] = useState({
     originalDocument: null,
     aiTranslation: '',
@@ -34,13 +39,114 @@ const TranslationEditor = () => {
   const [htmlFiles, setHtmlFiles] = useState([]);
   const [selectedPage, setSelectedPage] = useState(1);
 
+  // Initialize chatbot with dynamic configuration
+  const { config: chatbotConfig, updateConfig: updateChatbotConfig } = useChatbot({
+    enabled: true,
+    position: 'bottom-right',
+    title: 'Translation Assistant',
+    welcomeMessage: `Hi! I can help you improve this translation. You can:
+    
+🔧 **Quick Commands:**
+• Type "/format" to improve formatting
+• Type "/grammar" to fix grammar issues
+• Type "/formal" to make text more formal
+• Type "/casual" to make text more casual
+• Type "/translate [text]" to retranslate specific text
+
+📝 **Text Selection:**
+• Select text in the editor, then ask me to improve it
+• I'll focus on your selected text and provide context-aware suggestions
+
+What would you like me to help you with?`,
+    apiEndpoint: '/api/documents'
+  });
+
+  // Update chatbot configuration based on translation context
+  useEffect(() => {
+    if (translation.sourceLanguage && translation.targetLanguage) {
+      updateChatbotConfig({
+        title: `${translation.sourceLanguage.toUpperCase()} → ${translation.targetLanguage.toUpperCase()} Assistant`,
+        welcomeMessage: `Hi! I'm helping you translate from ${translation.sourceLanguage.toUpperCase()} to ${translation.targetLanguage.toUpperCase()}.
+
+🔧 **Quick Commands:**
+• "/format" - Improve formatting
+• "/grammar" - Fix grammar issues  
+• "/formal" - Make text more formal
+• "/casual" - Make text more casual
+• "/translate [text]" - Retranslate specific text
+• "/context" - Add more context to translation
+
+📝 **Text Selection:**
+Select any text in the editor and I'll help improve just that part!
+
+What would you like me to help you with?`
+      });
+    }
+  }, [translation.sourceLanguage, translation.targetLanguage, updateChatbotConfig]);
+
+  // Handle text selection in TinyMCE editor
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      if (editorRef.current) {
+        const editor = editorRef.current;
+        const selection = editor.selection;
+        
+        if (selection) {
+          const selectedContent = selection.getContent({ format: 'text' });
+          
+          if (selectedContent && selectedContent.trim().length > 0) {
+            setSelectedText(selectedContent.trim());
+            
+            // Get surrounding context (previous and next 100 characters)
+            const fullContent = editor.getContent({ format: 'text' });
+            const selectionStart = fullContent.indexOf(selectedContent);
+            const contextStart = Math.max(0, selectionStart - 100);
+            const contextEnd = Math.min(fullContent.length, selectionStart + selectedContent.length + 100);
+            const context = fullContent.substring(contextStart, contextEnd);
+            
+            setSelectionContext(context);
+            
+            // Update chatbot with selection info
+            updateChatbotConfig({
+              welcomeMessage: `I see you've selected: "${selectedContent.substring(0, 100)}${selectedContent.length > 100 ? '...' : ''}"
+
+I can help you:
+• Improve this specific text
+• Retranslate it with different style
+• Fix grammar or formatting issues
+• Make it more formal/casual
+
+What would you like me to do with this selection?`
+            });
+          } else {
+            setSelectedText('');
+            setSelectionContext('');
+          }
+        }
+      }
+    };
+
+    // Add selection change listener to TinyMCE
+    if (editorRef.current) {
+      const editor = editorRef.current;
+      editor.on('selectionchange', handleSelectionChange);
+      editor.on('keyup', handleSelectionChange);
+      editor.on('mouseup', handleSelectionChange);
+      
+      return () => {
+        editor.off('selectionchange', handleSelectionChange);
+        editor.off('keyup', handleSelectionChange);
+        editor.off('mouseup', handleSelectionChange);
+      };
+    }
+  }, [editorRef.current, updateChatbotConfig]);
+
   // Fetch translation data
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
         
-        // Check if translationId is a job/translation ID or document ID
         if (translationId) {
           try {
             // First try to get translation by ID (traditional flow)
@@ -225,6 +331,92 @@ const TranslationEditor = () => {
     }
   };
 
+  // Enhanced HTML update handler with selection support
+  const handleHtmlUpdate = (newHtml, changes) => {
+    setHtmlContent(newHtml);
+    
+    // Update the current page in htmlFiles if we're in multi-page mode
+    if (htmlFiles.length > 0) {
+      const currentPageIndex = selectedPage - 1;
+      if (htmlFiles[currentPageIndex]) {
+        const updatedHtmlFiles = [...htmlFiles];
+        updatedHtmlFiles[currentPageIndex] = {
+          ...updatedHtmlFiles[currentPageIndex],
+          content: newHtml
+        };
+        setHtmlFiles(updatedHtmlFiles);
+      }
+    }
+    
+    // Clear selection after update
+    setSelectedText('');
+    setSelectionContext('');
+    
+    // Reset chatbot welcome message
+    updateChatbotConfig({
+      welcomeMessage: `Great! I've updated the content. 
+
+🔧 **Quick Commands:**
+• "/format" - Improve formatting
+• "/grammar" - Fix grammar issues  
+• "/formal" - Make text more formal
+• "/casual" - Make text more casual
+• "/translate [text]" - Retranslate specific text
+
+📝 Select any text to get specific help with that section!`
+    });
+  };
+
+  // Enhanced chatbot message handler with command processing
+  const handleChatbotMessage = async (message, selectedText, context) => {
+    // Process quick commands
+    if (message.startsWith('/')) {
+      const command = message.toLowerCase();
+      let processedMessage = '';
+      
+      if (command === '/format') {
+        processedMessage = selectedText 
+          ? `Improve the formatting and structure of this selected text: "${selectedText}"`
+          : 'Improve the overall formatting and structure of the document';
+      } else if (command === '/grammar') {
+        processedMessage = selectedText
+          ? `Fix any grammar issues in this selected text: "${selectedText}"`
+          : 'Check and fix any grammar issues in the document';
+      } else if (command === '/formal') {
+        processedMessage = selectedText
+          ? `Make this selected text more formal: "${selectedText}"`
+          : 'Make the entire document more formal in tone';
+      } else if (command === '/casual') {
+        processedMessage = selectedText
+          ? `Make this selected text more casual: "${selectedText}"`
+          : 'Make the entire document more casual in tone';
+      } else if (command.startsWith('/translate ')) {
+        const textToTranslate = command.substring(11);
+        processedMessage = `Retranslate this text with improved accuracy: "${textToTranslate}"`;
+      } else if (command === '/context') {
+        processedMessage = selectedText
+          ? `Provide better contextual translation for: "${selectedText}". Consider the surrounding context: "${context}"`
+          : 'Improve the overall translation considering document context';
+      } else {
+        processedMessage = message; // Use original message if command not recognized
+      }
+      
+      return processedMessage;
+    }
+    
+    // If there's selected text, include it in the message
+    if (selectedText) {
+      return `${message}
+
+**Selected text:** "${selectedText}"
+**Context:** "${context}"
+
+Please focus on improving just the selected text based on my request.`;
+    }
+    
+    return message;
+  };
+
   // Save translation
   const handleSaveTranslation = async () => {
     if (editorRef.current) {
@@ -302,93 +494,30 @@ const TranslationEditor = () => {
   }
 
   return (
-    <div className="translation-editor">
-      <div className="editor-header">
-        <h1>Translation Editor</h1>
-        <div className="translation-meta">
-          <p><strong>Document ID:</strong> {translation.documentId || translationId}</p>
-          <p><strong>Document Type:</strong> {translation.documentType || 'Document'}</p>
-          {translation.documentHolder && (
-            <p><strong>Document Holder:</strong> {translation.documentHolder}</p>
-          )}
-          {translation.sourceLanguage && (
-            <p><strong>Source Language:</strong> {translation.sourceLanguage}</p>
-          )}
-          {translation.targetLanguage && (
-            <p><strong>Target Language:</strong> {translation.targetLanguage}</p>
-          )}
-        </div>
-      </div>
-
-      <div className="editor-container">
-        <div className="original-document">
-          <h2>Original Document</h2>
-          {translation.originalDocument ? (
-            <iframe 
-              src={translation.originalDocument} 
-              title="Original Document"
-              className="document-frame"
-            />
-          ) : (
-            <div className="document-placeholder">Original document not available</div>
-          )}
-        </div>
-        
-        <div className="translation-editor-container">
-          <div className="editor-header-actions">
-            <h2>Edit Translation</h2>
-            
-            {/* Page selector for multi-page documents */}
-            {htmlFiles.length > 1 && (
-              <div className="page-selector">
-                <label htmlFor="pageSelect">Page:</label>
-                <select 
-                  id="pageSelect" 
-                  value={selectedPage}
-                  onChange={(e) => handlePageChange(Number(e.target.value))}
-                  disabled={contentLoading || saving}
-                >
-                  {htmlFiles.map((file, index) => (
-                    <option key={index} value={index + 1}>
-                      Page {index + 1}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-          
-          {contentLoading ? (
-            <Spinner />
-          ) : (
-            <TinyMCEEditor
-              editorRef={editorRef}
-              initialValue={htmlContent || translation.finalTranslation || translation.aiTranslation}
-              onEditorChange={(content) => {
-                // Optional: If you want to update state on each change
-                setHtmlContent(content);
-              }}
-              height={500}
-            />
-          )}
-          <div className="editor-actions">
-            <button 
-              className="btn btn-secondary" 
-              onClick={handleSaveTranslation}
-              disabled={saving || contentLoading}
-            >
-              {saving ? 'Saving...' : 'Save Draft'}
-            </button>
-            <button 
-              className="btn btn-primary" 
-              onClick={handleApproveTranslation}
-              disabled={saving || contentLoading}
-            >
-              {saving ? 'Processing...' : 'Approve Translation'}
-            </button>
-          </div>
-        </div>
-      </div>
+    <div className="translation-editor-page">
+      <FullScreenTranslationViewer
+        originalDocument={translation.originalDocument}
+        htmlContent={htmlContent || translation.finalTranslation || translation.aiTranslation}
+        onHtmlChange={setHtmlContent}
+        editorRef={editorRef}
+        documentType={translation.documentType}
+        documentTitle={translation.documentHolder || `Translation ${translationId}`}
+        onSave={handleSaveTranslation}
+        onApprove={handleApproveTranslation}
+        saving={saving}
+        selectedPage={selectedPage}
+        totalPages={htmlFiles.length || 1}
+        onPageChange={handlePageChange}
+        // Chatbot props
+        documentId={translation.documentId || translationId}
+        onHtmlUpdate={handleHtmlUpdate}
+        selectedText={selectedText}
+        selectionContext={selectionContext}
+        onProcessMessage={handleChatbotMessage}
+        chatbotConfig={chatbotConfig}
+        sourceLanguage={translation.sourceLanguage}
+        targetLanguage={translation.targetLanguage}
+      />
     </div>
   );
 };

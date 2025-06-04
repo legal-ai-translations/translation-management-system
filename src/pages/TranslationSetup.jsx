@@ -1,4 +1,4 @@
-// pages/TranslationSetup.jsx with document upload functionality
+// pages/TranslationSetup.jsx with clear upload states
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -17,9 +17,11 @@ const TranslationSetup = () => {
   
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [documentHeight, setDocumentHeight] = useState(600); // Default height
+  const [documentHeight, setDocumentHeight] = useState(600);
   const [documentFile, setDocumentFile] = useState(null);
   const [uploadedDocument, setUploadedDocument] = useState(null);
+  const [uploadState, setUploadState] = useState('none'); // 'none', 'selected', 'uploading', 'uploaded'
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [translation, setTranslation] = useState({
     originalDocument: null,
     sourceLanguage: '',
@@ -33,9 +35,9 @@ const TranslationSetup = () => {
   
   // Form state for translation context
   const [translationContext, setTranslationContext] = useState({
-    translationMode: 'standard', // standard, interactive, or template
-    additionalContext: '', // Any additional context from translator
-    templateId: '', // For template-based translations
+    translationMode: 'standard',
+    additionalContext: '',
+    templateId: '',
     sourceLanguage: 'en',
     targetLanguage: 'fr',
   });
@@ -55,39 +57,24 @@ const TranslationSetup = () => {
         try {
           const data = await translationService.getTranslationById(translationId);
           setTranslation(data);
+          setUploadState('uploaded'); // Mark as uploaded if we have existing data
         } catch (error) {
           console.log('Not a traditional translation ID, trying as document ID');
           
           // If not found, assume it's a document ID from new flow
           const statusData = await documentService.checkTranslationStatus(translationId);
           
-          // Also try to fetch HTML response to get original document URL
-          try {
-            const htmlsData = await documentService.getTranslatedHTMLs(translationId);
-            
-            if (htmlsData.success && htmlsData.originalDocumentUrl) {
-              // If we have original document URL in the HTML response, use it
-              setTranslation(prev => ({
-                ...prev,
-                originalDocument: htmlsData.originalDocument?.url || null,
-                documentId: translationId
-              }));
-            } else {
-              // Otherwise use any URL from the status response
-              setTranslation(prev => ({
-                ...prev,
-                originalDocument: statusData.dropbox?.url || null,
-                documentId: translationId
-              }));
-            }
-          } catch (htmlError) {
-            console.log('Could not fetch HTML data, using status data instead');
-            setTranslation(prev => ({
-              ...prev,
-              originalDocument: statusData.dropbox?.url || null,
-              documentId: translationId
-            }));
-          }
+          // Set the preview URL for the original document
+          const previewUrl = documentService.getOriginalDocumentPreviewUrl(translationId);
+          
+          // Update translation state with the document ID and preview URL
+          setTranslation(prev => ({
+            ...prev,
+            originalDocument: previewUrl,
+            documentId: translationId
+          }));
+          
+          setUploadState('uploaded'); // Mark as uploaded since document exists
         }
         
         // Adjust document height based on window size
@@ -115,11 +102,9 @@ const TranslationSetup = () => {
   const adjustDocumentHeight = () => {
     const windowHeight = window.innerHeight;
     
-    // Set document viewer height to be proportional to window height
-    // with minimum and maximum constraints
     const newHeight = Math.max(
-      Math.min(Math.floor(windowHeight * 0.6), 800), // Max 800px
-      400 // Min 400px
+      Math.min(Math.floor(windowHeight * 0.6), 800),
+      400
     );
     
     setDocumentHeight(newHeight);
@@ -131,20 +116,23 @@ const TranslationSetup = () => {
     setTranslationContext(prev => ({ ...prev, [name]: value }));
   };
 
-  // Handle file selection
+  // Handle file selection - NO PREVIEW YET
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       setDocumentFile(file);
+      setUploadState('selected');
+      setUploadProgress(0);
       
-      // Preview the file if it's an image or PDF
-      if (file.type.includes('image/') || file.type === 'application/pdf') {
-        const objectUrl = URL.createObjectURL(file);
-        setTranslation(prev => ({
-          ...prev,
-          originalDocument: objectUrl
-        }));
-      }
+      // Clear any previous upload state
+      setUploadedDocument(null);
+      setTranslation(prev => ({
+        ...prev,
+        originalDocument: null,
+        documentType: '',
+        documentHolder: '',
+        documentId: null
+      }));
     }
   };
 
@@ -161,17 +149,38 @@ const TranslationSetup = () => {
     }
 
     try {
+      setUploadState('uploading');
       setProcessing(true);
+      setUploadProgress(0);
+      
+      // Simulate upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev < 90) {
+            return prev + 10;
+          }
+          return prev;
+        });
+      }, 300);
+      
       const result = await documentService.uploadDocument(documentFile);
       
+      // Complete the progress
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+      
       setUploadedDocument(result);
+      setUploadState('uploaded');
       
       toast.success('Document uploaded successfully!');
+      
+      // Get preview URL for original document
+      const previewUrl = documentService.getOriginalDocumentPreviewUrl(result.documentId);
       
       // Update translation info with uploaded document data
       setTranslation(prev => ({
         ...prev,
-        originalDocument: result.dropbox?.url || null,
+        originalDocument: previewUrl,
         documentType: documentFile.type,
         documentHolder: documentFile.name,
         documentId: result.documentId
@@ -180,6 +189,8 @@ const TranslationSetup = () => {
     } catch (error) {
       console.error('Error uploading document:', error);
       toast.error('Failed to upload document');
+      setUploadState('selected'); // Go back to selected state
+      setUploadProgress(0);
     } finally {
       setProcessing(false);
     }
@@ -229,32 +240,25 @@ const TranslationSetup = () => {
   const pollTranslationStatus = async (documentId, jobId) => {
     try {
       let isCompleted = false;
-      const maxAttempts = 30; // Prevent infinite polling
+      const maxAttempts = 30;
       let attempts = 0;
       
-      // Keep checking until translation is ready or max attempts reached
       while (!isCompleted && attempts < maxAttempts) {
         attempts++;
         
-        // Wait a bit before checking again (3 seconds)
         await new Promise(resolve => setTimeout(resolve, 3000));
         
-        // Check translation status
         const statusData = await documentService.checkTranslationStatus(documentId);
         
         console.log('Translation status:', statusData);
         
-        // If translation is completed, get the results
         if (statusData.status === 'completed') {
           isCompleted = true;
-          
-          // Navigate to the editor with the document ID
           navigate(`/translator/edit/${documentId}`);
           return;
         }
       }
       
-      // If we hit max attempts but translation is not ready
       if (!isCompleted) {
         toast.info('Translation is taking longer than expected. Please check back later.');
         navigate('/translator/dashboard');
@@ -299,8 +303,34 @@ const TranslationSetup = () => {
     <div className="container translation-setup">
       <h1>Translation Setup</h1>
       
-      {/* Display document info if available */}
-      {(translation.documentId || uploadedDocument?.documentId) && (
+      {/* Document Upload Progress */}
+      {uploadState !== 'none' && (
+        <div className="upload-progress-container">
+          <div className="upload-status-header">
+            <h3>Document Upload Status</h3>
+            <div className={`upload-status-badge ${uploadState}`}>
+              {uploadState === 'selected' && '📄 File Selected'}
+              {uploadState === 'uploading' && '⏳ Uploading...'}
+              {uploadState === 'uploaded' && '✅ Upload Complete'}
+            </div>
+          </div>
+          
+          {uploadState === 'uploading' && (
+            <div className="progress-bar-container">
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill" 
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+              <span className="progress-text">{uploadProgress}%</span>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Display document info if uploaded */}
+      {uploadState === 'uploaded' && (translation.documentId || uploadedDocument?.documentId) && (
         <div className="document-info">
           <div className="section-header">
             <h2>Document Information</h2>
@@ -337,79 +367,111 @@ const TranslationSetup = () => {
             style={{ display: 'none' }}
           />
           
-          <div className="upload-box">
-            <div className="upload-content">
-              {documentFile ? (
-                <>
-                  <div className="selected-file">
-                    <i className="file-icon">📄</i>
-                    <p>{documentFile.name}</p>
+          {/* File Selection State */}
+          {uploadState === 'none' && (
+            <div className="upload-box" onClick={handleBrowseClick}>
+              <div className="upload-content">
+                <i className="upload-icon">📤</i>
+                <p>Drag and drop your document here, or</p>
+                <button 
+                  className="btn btn-primary"
+                  type="button"
+                >
+                  Browse Files
+                </button>
+                <p className="upload-hint">Supported formats: PDF, Word, JPG, PNG</p>
+              </div>
+            </div>
+          )}
+          
+          {/* File Selected State */}
+          {uploadState === 'selected' && (
+            <div className="file-selected-state">
+              <div className="selected-file-info">
+                <div className="file-details">
+                  <i className="file-icon">📄</i>
+                  <div className="file-meta">
+                    <p className="file-name">{documentFile.name}</p>
                     <span className="file-size">({Math.round(documentFile.size / 1024)} KB)</span>
                   </div>
-                  
-                  <button 
-                    className="btn btn-secondary"
-                    onClick={handleBrowseClick}
-                    disabled={processing}
-                  >
-                    Change File
-                  </button>
-                </>
-              ) : (
-                <>
-                  <i className="upload-icon">📤</i>
-                  <p>Drag and drop your document here, or</p>
-                  <button 
-                    className="btn btn-primary"
-                    onClick={handleBrowseClick}
-                    disabled={processing}
-                  >
-                    Browse Files
-                  </button>
-                  <p className="upload-hint">Supported formats: PDF, Word, JPG, PNG</p>
-                </>
-              )}
+                </div>
+                
+                <div className="upload-reminder">
+                  <div className="reminder-icon">⚠️</div>
+                  <div className="reminder-text">
+                    <strong>Ready to Upload</strong>
+                    <p>Click "Upload Document" to proceed with the translation setup</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="file-actions">
+                <button 
+                  className="btn btn-secondary"
+                  onClick={handleBrowseClick}
+                  disabled={processing}
+                >
+                  Change File
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleUploadDocument}
+                  disabled={processing}
+                >
+                  {processing ? 'Uploading...' : 'Upload Document'}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
           
-          {documentFile && !uploadedDocument && (
-            <div className="upload-actions">
-              <button
-                className="btn btn-primary"
-                onClick={handleUploadDocument}
-                disabled={processing}
-              >
-                {processing ? (
-                  <>
-                    <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                    Uploading...
-                  </>
-                ) : (
-                  'Upload Document'
-                )}
-              </button>
+          {/* Uploading State */}
+          {uploadState === 'uploading' && (
+            <div className="uploading-state">
+              <div className="upload-spinner">
+                <div className="spinner"></div>
+              </div>
+              <p>Uploading your document...</p>
+              <small>Please don't close this page</small>
+            </div>
+          )}
+          
+          {/* Upload Complete State */}
+          {uploadState === 'uploaded' && (
+            <div className="upload-complete-state">
+              <div className="success-icon">✅</div>
+              <p><strong>Upload Successful!</strong></p>
+              <p>Your document is ready for translation setup</p>
+              {documentFile && (
+                <div className="uploaded-file-info">
+                  <span>{documentFile.name}</span>
+                  <button 
+                    className="btn btn-sm btn-secondary"
+                    onClick={handleBrowseClick}
+                  >
+                    Upload Different File
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
       
-      {/* Original Document Viewer with Flexible Height */}
-      {(translation.originalDocument || uploadedDocument) && (
+      {/* Original Document Viewer - Only show after upload */}
+      {uploadState === 'uploaded' && translation.originalDocument && (
         <div className="original-document-section">
           <div className="section-header">
-            <h2>Original Document</h2>
-            {translation.originalDocument && (
-              <div className="document-actions">
-                <a 
-                  href={translation.originalDocument} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="btn btn-sm btn-secondary"
-                >
-                  <i className="icon-download"></i> View Original
-                </a>
-              </div>
-            )}
+            <h2>Document Preview</h2>
+            <div className="document-actions">
+              <a 
+                href={translation.originalDocument} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="btn btn-sm btn-secondary"
+              >
+                <i className="icon-download"></i> View Original
+              </a>
+            </div>
           </div>
           <DocumentViewer 
             documentUrl={translation.originalDocument} 
@@ -421,151 +483,153 @@ const TranslationSetup = () => {
         </div>
       )}
       
-      {/* Translation Options Form */}
-      <div className="translation-setup-form">
-        <div className="section-header">
-          <h2>Translation Options</h2>
-          <div className="mode-indicator">
-            {translationContext.translationMode === 'standard' && (
-              <span className="badge badge-primary">Standard Mode</span>
-            )}
-            {translationContext.translationMode === 'interactive' && (
-              <span className="badge badge-info">Interactive Mode</span>
-            )}
-            {translationContext.translationMode === 'template' && (
-              <span className="badge badge-success">Template Mode</span>
-            )}
+      {/* Translation Options Form - Only show after upload */}
+      {uploadState === 'uploaded' && (
+        <div className="translation-setup-form">
+          <div className="section-header">
+            <h2>Translation Options</h2>
+            <div className="mode-indicator">
+              {translationContext.translationMode === 'standard' && (
+                <span className="badge badge-primary">Standard Mode</span>
+              )}
+              {translationContext.translationMode === 'interactive' && (
+                <span className="badge badge-info">Interactive Mode</span>
+              )}
+              {translationContext.translationMode === 'template' && (
+                <span className="badge badge-success">Template Mode</span>
+              )}
+            </div>
           </div>
-        </div>
-        
-        <form>
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="sourceLanguage">Source Language</label>
-              <select
-                id="sourceLanguage"
-                name="sourceLanguage"
-                value={translationContext.sourceLanguage}
-                onChange={handleInputChange}
-                disabled={processing}
-                className="form-select"
-              >
-                <option value="en">English</option>
-                <option value="fr">French</option>
-                <option value="es">Spanish</option>
-                <option value="pt">Portuguese</option>
-                <option value="it">Italian</option>
-              </select>
+          
+          <form>
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="sourceLanguage">Source Language</label>
+                <select
+                  id="sourceLanguage"
+                  name="sourceLanguage"
+                  value={translationContext.sourceLanguage}
+                  onChange={handleInputChange}
+                  disabled={processing}
+                  className="form-select"
+                >
+                  <option value="en">English</option>
+                  <option value="fr">French</option>
+                  <option value="es">Spanish</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="it">Italian</option>
+                </select>
+              </div>
+              
+              <div className="form-group">
+                <label htmlFor="targetLanguage">Target Language</label>
+                <select
+                  id="targetLanguage"
+                  name="targetLanguage"
+                  value={translationContext.targetLanguage}
+                  onChange={handleInputChange}
+                  disabled={processing}
+                  className="form-select"
+                >
+                  <option value="en">English</option>
+                  <option value="fr">French</option>
+                  <option value="es">Spanish</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="it">Italian</option>
+                </select>
+              </div>
             </div>
             
             <div className="form-group">
-              <label htmlFor="targetLanguage">Target Language</label>
+              <label htmlFor="translationMode">Translation Mode</label>
               <select
-                id="targetLanguage"
-                name="targetLanguage"
-                value={translationContext.targetLanguage}
+                id="translationMode"
+                name="translationMode"
+                value={translationContext.translationMode}
                 onChange={handleInputChange}
                 disabled={processing}
                 className="form-select"
               >
-                <option value="en">English</option>
-                <option value="fr">French</option>
-                <option value="es">Spanish</option>
-                <option value="pt">Portuguese</option>
-                <option value="it">Italian</option>
+                <option value="standard">Standard Translation</option>
+                <option value="interactive">Interactive Translation (with questions)</option>
+                <option value="template">Template-Based Translation</option>
               </select>
+              <small className="form-text">
+                {translationContext.translationMode === 'standard' && 
+                  'Standard mode translates the document without additional interaction.'}
+                {translationContext.translationMode === 'interactive' && 
+                  'Interactive mode allows the AI to ask questions during translation for better accuracy.'}
+                {translationContext.translationMode === 'template' && 
+                  'Template mode uses predefined templates for common document types.'}
+              </small>
             </div>
-          </div>
-          
-          <div className="form-group">
-            <label htmlFor="translationMode">Translation Mode</label>
-            <select
-              id="translationMode"
-              name="translationMode"
-              value={translationContext.translationMode}
-              onChange={handleInputChange}
-              disabled={processing}
-              className="form-select"
-            >
-              <option value="standard">Standard Translation</option>
-              <option value="interactive">Interactive Translation (with questions)</option>
-              <option value="template">Template-Based Translation</option>
-            </select>
-            <small className="form-text">
-              {translationContext.translationMode === 'standard' && 
-                'Standard mode translates the document without additional interaction.'}
-              {translationContext.translationMode === 'interactive' && 
-                'Interactive mode allows the AI to ask questions during translation for better accuracy.'}
-              {translationContext.translationMode === 'template' && 
-                'Template mode uses predefined templates for common document types.'}
-            </small>
-          </div>
-          
-          {translationContext.translationMode === 'template' && (
+            
+            {translationContext.translationMode === 'template' && (
+              <div className="form-group">
+                <label htmlFor="templateId">Select Template</label>
+                <select
+                  id="templateId"
+                  name="templateId"
+                  value={translationContext.templateId}
+                  onChange={handleInputChange}
+                  disabled={processing}
+                  className="form-select"
+                >
+                  <option value="">Select a template</option>
+                  <option value="birth_certificate">Birth Certificate</option>
+                  <option value="drivers_license">Driver's License</option>
+                  <option value="passport">Passport</option>
+                  <option value="academic_transcript">Academic Transcript</option>
+                </select>
+              </div>
+            )}
+            
             <div className="form-group">
-              <label htmlFor="templateId">Select Template</label>
-              <select
-                id="templateId"
-                name="templateId"
-                value={translationContext.templateId}
+              <label htmlFor="additionalContext">Additional Context for Translation</label>
+              <textarea
+                id="additionalContext"
+                name="additionalContext"
+                value={translationContext.additionalContext}
                 onChange={handleInputChange}
+                placeholder="Add any additional context that might help with the translation..."
+                rows={4}
                 disabled={processing}
-                className="form-select"
-              >
-                <option value="">Select a template</option>
-                <option value="birth_certificate">Birth Certificate</option>
-                <option value="drivers_license">Driver's License</option>
-                <option value="passport">Passport</option>
-                <option value="academic_transcript">Academic Transcript</option>
-              </select>
+                className="form-control"
+              />
+              <small className="form-text">
+                Provide any additional information that might help the AI produce a better translation.
+                This can include specific terminology, formatting requirements, or legal context.
+              </small>
             </div>
-          )}
-          
-          <div className="form-group">
-            <label htmlFor="additionalContext">Additional Context for Translation</label>
-            <textarea
-              id="additionalContext"
-              name="additionalContext"
-              value={translationContext.additionalContext}
-              onChange={handleInputChange}
-              placeholder="Add any additional context that might help with the translation..."
-              rows={4}
-              disabled={processing}
-              className="form-control"
-            />
-            <small className="form-text">
-              Provide any additional information that might help the AI produce a better translation.
-              This can include specific terminology, formatting requirements, or legal context.
-            </small>
-          </div>
-          
-          <div className="form-actions">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => navigate('/translator/dashboard')}
-              disabled={processing}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleStartTranslation}
-              disabled={processing || !uploadedDocument}
-            >
-              {processing ? (
-                <>
-                  <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                  Processing...
-                </>
-              ) : (
-                <>Start Translation</>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
+            
+            <div className="form-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => navigate('/translator/dashboard')}
+                disabled={processing}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleStartTranslation}
+                disabled={processing || !uploadedDocument}
+              >
+                {processing ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Processing...
+                  </>
+                ) : (
+                  <>Start Translation</>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
