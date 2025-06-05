@@ -140,6 +140,28 @@ const documentService = {
 
   getOriginalDocumentPreviewUrl: (documentId) => {
     return `http://localhost:3002/api/documents/${documentId}/original?preview=true`;
+  },
+
+  // services/documentService.js
+  improveHTMLWithSelection: async (documentId, improveRequest) => {
+    try {
+      const response = await apiClient.post(`http://localhost:3002/api/documents/${documentId}/improve-html`, {
+        currentHtml: improveRequest.currentHtml,
+        userFeedback: improveRequest.userFeedback,
+        selectedHtml: improveRequest.selectedHtml,
+        selectedText: improveRequest.selectedText,
+        selectionContext: improveRequest.selectionContext,
+        hasSelection: improveRequest.hasSelection,
+        isCommand: improveRequest.isCommand,
+        commandType: improveRequest.commandType,
+        conversationHistory: improveRequest.conversationHistory || []
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error(`Error improving HTML with selection for document ${documentId}:`, error);
+      throw error;
+    }
   }
 };
 
